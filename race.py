@@ -110,7 +110,7 @@ class InputFeatures(object):
 
 # data_grade is a list of grades of the dataset.
 # for example: ["high","middle"]
-def read_race(input_dir, data_grade = ["high","middle"]):
+def read_race(input_dir, data_grade = ["middle"]):
     
     samples = []    
     for grade in data_grade:
@@ -313,10 +313,7 @@ def main():
     parser.add_argument("--no_cuda",
                         action='store_true',
                         help="Whether not to use CUDA when available")
-    parser.add_argument("--local_rank",
-                        type=int,
-                        default=-1,
-                        help="local_rank for distributed training on gpus")
+
     parser.add_argument('--seed',
                         type=int,
                         default=42,
@@ -333,21 +330,14 @@ def main():
                         help="Loss scaling to improve fp16 numeric stability. Only used when fp16 set to True.\n"
                              "0 (default value): dynamic loss scaling.\n"
                              "Positive power of 2: static loss scaling value.\n")
+    
 
     args = parser.parse_args()
 
-    if args.local_rank == -1 or args.no_cuda:
-        device = torch.device("cuda" if torch.cuda.is_available() and not args.no_cuda else "cpu")
-        n_gpu = torch.cuda.device_count()
-    else:
-        torch.cuda.set_device(args.local_rank)
-        device = torch.device("cuda", args.local_rank)
-        n_gpu = 1
-        # Initializes the distributed backend which will take care of sychronizing nodes/GPUs
-        torch.distributed.init_process_group(backend='nccl')
-    logger.info("device: {} n_gpu: {}, distributed training: {}, 16-bits training: {}".format(
-        device, n_gpu, bool(args.local_rank != -1), args.fp16))
-
+    
+    device = torch.device("cuda" if torch.cuda.is_available() and not args.no_cuda else "cpu")
+   
+        
     if args.gradient_accumulation_steps < 1:
         raise ValueError("Invalid gradient_accumulation_steps parameter: {}, should be >= 1".format(
                             args.gradient_accumulation_steps))
@@ -357,8 +347,7 @@ def main():
     random.seed(args.seed)
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
-    if n_gpu > 0:
-        torch.cuda.manual_seed_all(args.seed)
+   
 
     if not args.do_train and not args.do_eval:
         raise ValueError("At least one of `do_train` or `do_eval` must be True.")
@@ -374,29 +363,22 @@ def main():
     train_examples = None
     num_train_optimization_steps = None
     if args.do_train:
-        train_examples = read_race("./RACE/train")
+        train_examples = read_race(os.path.join(args.data_dir,"train"))
         print(len(train_examples), args.train_batch_size,args.gradient_accumulation_steps)
         num_train_optimization_steps = int(
             len(train_examples) / args.train_batch_size / args.gradient_accumulation_steps) * args.num_train_epochs
-        if args.local_rank != -1:
-            num_train_optimization_steps = num_train_optimization_steps // torch.distributed.get_world_size()
+        
 
     # Prepare model
     model = BertForMultipleChoice.from_pretrained(args.bert_model,
-        cache_dir=os.path.join(str(PYTORCH_PRETRAINED_BERT_CACHE), 'distributed_{}'.format(args.local_rank)),
+        cache_dir=PYTORCH_PRETRAINED_BERT_CACHE,
         num_choices=4)
+    
     if args.fp16:
         model.half()
+        
     model.to(device)
-    if args.local_rank != -1:
-        try:
-            from apex.parallel import DistributedDataParallel as DDP
-        except ImportError:
-            raise ImportError("Please install apex from https://www.github.com/nvidia/apex to use distributed and fp16 training.")
-
-        model = DDP(model)
-    elif n_gpu > 1:
-        model = torch.nn.DataParallel(model)
+    
 
     #Freeze the embedding network and encoder layers
     print("Freeze network")
@@ -462,10 +444,9 @@ def main():
         all_segment_ids = torch.tensor(select_field(train_features, 'segment_ids'), dtype=torch.long)
         all_label = torch.tensor([f.label for f in train_features], dtype=torch.long)
         train_data = TensorDataset(all_input_ids, all_input_mask, all_segment_ids, all_label)
-        if args.local_rank == -1:
-            train_sampler = RandomSampler(train_data)
-        else:
-            train_sampler = DistributedSampler(train_data)
+        
+        
+        train_sampler = DistributedSampler(train_data)
         train_dataloader = DataLoader(train_data, sampler=train_sampler, batch_size=args.train_batch_size)
 
         model.train()
@@ -540,8 +521,8 @@ def main():
     model.to(device)
 
 
-    if args.do_eval and (args.local_rank == -1 or torch.distributed.get_rank() == 0):
-        eval_examples = read_race("./RACE/dev")
+    if args.do_eval:
+        eval_examples = read_race(os.path.join(args.data_dir,"dev"))
         eval_features = convert_examples_to_features(
             eval_examples, tokenizer, args.max_seq_length, True)
         logger.info("***** Running evaluation *****")
