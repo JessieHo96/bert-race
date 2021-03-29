@@ -446,7 +446,7 @@ def main():
         train_data = TensorDataset(all_input_ids, all_input_mask, all_segment_ids, all_label)
         
         
-        train_sampler = DistributedSampler(train_data)
+        train_sampler = RandomSampler(train_data)
         train_dataloader = DataLoader(train_data, sampler=train_sampler, batch_size=args.train_batch_size)
 
         model.train()
@@ -464,8 +464,8 @@ def main():
                 batch = tuple(t.to(device) for t in batch)
                 input_ids, input_mask, segment_ids, label_ids = batch
                 loss = model(input_ids, segment_ids, input_mask, label_ids)
-                if n_gpu > 1:
-                    loss = loss.mean() # mean() to average on multi-gpu.
+#                 if n_gpu > 1:
+#                     loss = loss.mean() # mean() to average on multi-gpu.
                 if args.fp16 and args.loss_scale != 1.0:
                     # rescale loss for fp16 training
                     # see https://docs.nvidia.com/deeplearning/sdk/mixed-precision-training/index.html
